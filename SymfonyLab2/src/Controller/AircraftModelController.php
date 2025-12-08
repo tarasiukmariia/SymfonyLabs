@@ -3,16 +3,23 @@
 namespace App\Controller;
 
 use App\Entity\AircraftModel;
+use App\Service\AircraftModelService;
+use App\Service\RequestValidatorService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/aircraft-models')]
 class AircraftModelController extends AbstractController
 {
-    public function __construct(private EntityManagerInterface $entityManager) {}
+    public function __construct(
+        private EntityManagerInterface $entityManager,
+        private AircraftModelService $aircraftModelService, 
+        private RequestValidatorService $validator         
+    ) {}
 
     #[Route('', methods: ['GET'])]
     public function index(): JsonResponse
@@ -54,19 +61,19 @@ class AircraftModelController extends AbstractController
     {
         $data = json_decode($request->getContent(), true);
 
-        if (!isset($data['manufacturer']) || !isset($data['model_name']) || !isset($data['max_range_km'])) {
-            return $this->json(['error' => 'Missing required fields'], 400);
+        try {
+            $requiredFields = ['manufacturer', 'model_name', 'max_range_km'];
+            $this->validator->validateRequiredFields($data, $requiredFields);
+
+            $model = $this->aircraftModelService->createAircraftModel($data);
+
+            return $this->json(['status' => 'Created', 'id' => $model->getId()], 201);
+
+        } catch (HttpException $e) {
+            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], 400);
         }
-
-        $model = new AircraftModel();
-        $model->setManufacturer($data['manufacturer']);
-        $model->setModelName($data['model_name']);
-        $model->setMaxRangeKm((int)$data['max_range_km']);
-
-        $this->entityManager->persist($model);
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Created', 'id' => $model->getId()], 201);
     }
 
     #[Route('/{id}', methods: ['PUT', 'PATCH'])]

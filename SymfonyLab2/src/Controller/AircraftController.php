@@ -4,16 +4,23 @@ namespace App\Controller;
 
 use App\Entity\Aircraft;
 use App\Entity\AircraftModel;
+use App\Service\AircraftService;
+use App\Service\RequestValidatorService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/aircrafts')]
 class AircraftController extends AbstractController
 {
-    public function __construct(private EntityManagerInterface $entityManager) {}
+    public function __construct(
+        private EntityManagerInterface $entityManager,
+        private AircraftService $aircraftService,       
+        private RequestValidatorService $validator      
+    ) {}
 
     #[Route('', methods: ['GET'])]
     public function index(): JsonResponse
@@ -64,29 +71,19 @@ class AircraftController extends AbstractController
     {
         $data = json_decode($request->getContent(), true);
 
-        if (!isset($data['model_id'])) {
-            return $this->json(['error' => 'model_id is required'], 400);
+        try {
+            $requiredFields = ['model_id', 'registration_number', 'total_capacity'];
+            $this->validator->validateRequiredFields($data, $requiredFields);
+
+            $aircraft = $this->aircraftService->createAircraft($data);
+
+            return $this->json(['status' => 'Created', 'id' => $aircraft->getId()], 201);
+
+        } catch (HttpException $e) {
+            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+        } catch (\Exception $e) {
+          return $this->json(['error' => $e->getMessage()], 400);
         }
-
-        $model = $this->entityManager->getRepository(AircraftModel::class)->find($data['model_id']);
-        if (!$model) {
-            return $this->json(['error' => 'Model not found'], 404);
-        }
-
-        $aircraft = new Aircraft();
-        $aircraft->setRegistrationNumber($data['registration_number']);
-        $aircraft->setTotalCapacity((int)$data['total_capacity']);
-        
-        if (isset($data['manufacture_date'])) {
-            $aircraft->setManufactureDate(new \DateTime($data['manufacture_date']));
-        }
-
-        $aircraft->setModel($model);
-
-        $this->entityManager->persist($aircraft);
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Created', 'id' => $aircraft->getId()], 201);
     }
 
     #[Route('/{id}', methods: ['PUT', 'PATCH'])]
@@ -107,7 +104,11 @@ class AircraftController extends AbstractController
             $aircraft->setTotalCapacity((int)$data['total_capacity']);
         }
         if (isset($data['manufacture_date'])) {
-            $aircraft->setManufactureDate(new \DateTime($data['manufacture_date']));
+            try {
+                $aircraft->setManufactureDate(new \DateTime($data['manufacture_date']));
+            } catch (\Exception $e) {
+                return $this->json(['error' => 'Invalid date format'], 400);
+            }
         }
         
         if (isset($data['model_id'])) {

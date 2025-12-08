@@ -4,16 +4,23 @@ namespace App\Controller;
 
 use App\Entity\Baggage;
 use App\Entity\Ticket;
+use App\Service\BaggageService;
+use App\Service\RequestValidatorService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/baggage')]
 class BaggageController extends AbstractController
 {
-    public function __construct(private EntityManagerInterface $entityManager) {}
+    public function __construct(
+        private EntityManagerInterface $entityManager,
+        private BaggageService $baggageService,         
+        private RequestValidatorService $validator      
+    ) {}
 
     #[Route('', methods: ['GET'])]
     public function index(): JsonResponse
@@ -57,25 +64,22 @@ class BaggageController extends AbstractController
     {
         $data = json_decode($request->getContent(), true);
 
-        if (!isset($data['ticket_id']) || !isset($data['weight_kg'])) {
-            return $this->json(['error' => 'Missing required fields (ticket_id, weight_kg)'], 400);
+        try {
+            // 1. ВАЛІДАЦІЯ
+            $requiredFields = ['ticket_id', 'weight_kg'];
+            $this->validator->validateRequiredFields($data, $requiredFields);
+
+            // 2. ЛОГІКА (через сервіс)
+            $baggage = $this->baggageService->createBaggage($data);
+
+            // 3. ВІДПОВІДЬ
+            return $this->json(['status' => 'Created', 'id' => $baggage->getId()], 201);
+
+        } catch (HttpException $e) {
+            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], 400);
         }
-
-        $ticket = $this->entityManager->getRepository(Ticket::class)->find($data['ticket_id']);
-        if (!$ticket) {
-            return $this->json(['error' => 'Ticket not found'], 404);
-        }
-
-        $baggage = new Baggage();
-        $baggage->setTicket($ticket);
-        $baggage->setWeightKg((string)$data['weight_kg']);
-        $baggage->setType($data['type'] ?? 'checked'); 
-        $baggage->setPrice($data['price'] ?? 0);
-
-        $this->entityManager->persist($baggage);
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Created', 'id' => $baggage->getId()], 201);
     }
 
     #[Route('/{id}', methods: ['PUT', 'PATCH'])]

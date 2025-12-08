@@ -4,16 +4,23 @@ namespace App\Controller;
 
 use App\Entity\Booking;
 use App\Entity\Passenger;
+use App\Service\BookingService;
+use App\Service\RequestValidatorService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/bookings')]
 class BookingController extends AbstractController
 {
-    public function __construct(private EntityManagerInterface $entityManager) {}
+    public function __construct(
+        private EntityManagerInterface $entityManager,
+        private BookingService $bookingService,        
+        private RequestValidatorService $validator      
+    ) {}
 
     #[Route('', methods: ['GET'])]
     public function index(): JsonResponse
@@ -59,31 +66,19 @@ class BookingController extends AbstractController
     {
         $data = json_decode($request->getContent(), true);
 
-        if (!isset($data['booker_id']) || !isset($data['booking_reference']) || !isset($data['total_amount'])) {
-            return $this->json(['error' => 'Missing required fields (booker_id, booking_reference, total_amount)'], 400);
-        }
+        try {
+            $requiredFields = ['booker_id', 'booking_reference', 'total_amount'];
+            $this->validator->validateRequiredFields($data, $requiredFields);
 
-        $booker = $this->entityManager->getRepository(Passenger::class)->find($data['booker_id']);
-        if (!$booker) {
-            return $this->json(['error' => 'Passenger (booker) not found'], 404);
-        }
+            $booking = $this->bookingService->createBooking($data);
 
-        $booking = new Booking();
-        $booking->setBookingReference($data['booking_reference']);
-        $booking->setBooker($booker);
-        $booking->setTotalAmount((string)$data['total_amount']);
-        
-        if (isset($data['status'])) {
-            $booking->setStatus($data['status']);
-        }
-        if (isset($data['booking_date'])) {
-            $booking->setBookingDate(new \DateTime($data['booking_date']));
-        }
+            return $this->json(['status' => 'Created', 'id' => $booking->getId()], 201);
 
-        $this->entityManager->persist($booking);
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Created', 'id' => $booking->getId()], 201);
+        } catch (HttpException $e) {
+            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], 400);
+        }
     }
 
     #[Route('/{id}', methods: ['PUT', 'PATCH'])]

@@ -3,16 +3,23 @@
 namespace App\Controller;
 
 use App\Entity\TravelClass;
+use App\Service\RequestValidatorService;
+use App\Service\TravelClassService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/travel-classes')]
 class TravelClassController extends AbstractController
 {
-    public function __construct(private EntityManagerInterface $entityManager) {}
+    public function __construct(
+        private EntityManagerInterface $entityManager,
+        private TravelClassService $travelClassService, 
+        private RequestValidatorService $validator      
+    ) {}
 
     #[Route('', methods: ['GET'])]
     public function index(): JsonResponse
@@ -52,18 +59,19 @@ class TravelClassController extends AbstractController
     {
         $data = json_decode($request->getContent(), true);
 
-        if (!isset($data['name']) || !isset($data['price_multiplier'])) {
-            return $this->json(['error' => 'Missing required fields (name, price_multiplier)'], 400);
+        try {
+            $required = ['name', 'price_multiplier'];
+            $this->validator->validateRequiredFields($data, $required);
+
+            $class = $this->travelClassService->createTravelClass($data);
+
+            return $this->json(['status' => 'Created', 'id' => $class->getId()], 201);
+
+        } catch (HttpException $e) {
+            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], 400);
         }
-
-        $class = new TravelClass();
-        $class->setName($data['name']);
-        $class->setPriceMultiplier((string)$data['price_multiplier']);
-
-        $this->entityManager->persist($class);
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Created', 'id' => $class->getId()], 201);
     }
 
     #[Route('/{id}', methods: ['PUT', 'PATCH'])]

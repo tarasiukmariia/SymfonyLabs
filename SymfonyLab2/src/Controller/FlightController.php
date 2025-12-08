@@ -5,16 +5,23 @@ namespace App\Controller;
 use App\Entity\Flight;
 use App\Entity\Airport;
 use App\Entity\Aircraft;
+use App\Service\FlightService;
+use App\Service\RequestValidatorService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/flights')]
 class FlightController extends AbstractController
 {
-    public function __construct(private EntityManagerInterface $entityManager) {}
+    public function __construct(
+        private EntityManagerInterface $entityManager,
+        private FlightService $flightService,           
+        private RequestValidatorService $validator      
+    ) {}
 
     #[Route('', methods: ['GET'])]
     public function index(): JsonResponse
@@ -31,7 +38,7 @@ class FlightController extends AbstractController
                 'arrival_time' => $flight->getArrivalTime()->format('Y-m-d H:i:s'),
                 'base_price' => $flight->getBasePrice(),
                 'departure_airport' => $flight->getDepartureAirport()->getIataCode(), 
-                'arrival_airport' => $flight->getArrivalAirport()->getIataCode(),    
+                'arrival_airport' => $flight->getArrivalAirport()->getIataCode(),     
                 'aircraft' => $flight->getAircraft() ? $flight->getAircraft()->getRegistrationNumber() : null
             ];
         }
@@ -66,42 +73,26 @@ class FlightController extends AbstractController
     {
         $data = json_decode($request->getContent(), true);
 
-        $requiredFields = ['flight_number', 'departure_airport_id', 'arrival_airport_id', 'departure_time', 'arrival_time', 'base_price'];
-        foreach ($requiredFields as $field) {
-            if (!isset($data[$field])) {
-                return $this->json(['error' => "Missing field: $field"], 400);
-            }
+        try {
+            $requiredFields = [
+                'flight_number', 
+                'departure_airport_id', 
+                'arrival_airport_id', 
+                'departure_time', 
+                'arrival_time', 
+                'base_price'
+            ];
+            $this->validator->validateRequiredFields($data, $requiredFields);
+
+            $flight = $this->flightService->createFlight($data);
+
+            return $this->json(['status' => 'Created', 'id' => $flight->getId()], 201);
+
+        } catch (HttpException $e) {
+            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], 400);
         }
-
-        $depAirport = $this->entityManager->getRepository(Airport::class)->find($data['departure_airport_id']);
-        $arrAirport = $this->entityManager->getRepository(Airport::class)->find($data['arrival_airport_id']);
-
-        if (!$depAirport || !$arrAirport) {
-            return $this->json(['error' => 'One of the airports not found'], 404);
-        }
-
-        $flight = new Flight();
-        $flight->setFlightNumber($data['flight_number']);
-        $flight->setDepartureAirport($depAirport);
-        $flight->setArrivalAirport($arrAirport);
-        $flight->setDepartureTime(new \DateTime($data['departure_time']));
-        $flight->setArrivalTime(new \DateTime($data['arrival_time']));
-        $flight->setBasePrice((string)$data['base_price']);
-        $flight->setStatus($data['status'] ?? 'Scheduled');
-
-        if (isset($data['aircraft_id'])) {
-            $aircraft = $this->entityManager->getRepository(Aircraft::class)->find($data['aircraft_id']);
-            if ($aircraft) {
-                $flight->setAircraft($aircraft);
-            } else {
-                return $this->json(['error' => 'Aircraft not found'], 404);
-            }
-        }
-
-        $this->entityManager->persist($flight);
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Created', 'id' => $flight->getId()], 201);
     }
 
     #[Route('/{id}', methods: ['PUT', 'PATCH'])]
@@ -118,8 +109,13 @@ class FlightController extends AbstractController
         if (isset($data['flight_number'])) $flight->setFlightNumber($data['flight_number']);
         if (isset($data['status'])) $flight->setStatus($data['status']);
         if (isset($data['base_price'])) $flight->setBasePrice((string)$data['base_price']);
-        if (isset($data['departure_time'])) $flight->setDepartureTime(new \DateTime($data['departure_time']));
-        if (isset($data['arrival_time'])) $flight->setArrivalTime(new \DateTime($data['arrival_time']));
+        
+        try {
+            if (isset($data['departure_time'])) $flight->setDepartureTime(new \DateTime($data['departure_time']));
+            if (isset($data['arrival_time'])) $flight->setArrivalTime(new \DateTime($data['arrival_time']));
+        } catch (\Exception $e) {
+            return $this->json(['error' => 'Invalid date format'], 400);
+        }
 
         if (isset($data['aircraft_id'])) {
             $aircraft = $this->entityManager->getRepository(Aircraft::class)->find($data['aircraft_id']);

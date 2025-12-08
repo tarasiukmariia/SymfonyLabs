@@ -5,18 +5,24 @@ namespace App\Controller;
 use App\Entity\Ticket;
 use App\Entity\Booking;
 use App\Entity\Flight;
-use App\Entity\Passenger;
 use App\Entity\TravelClass;
+use App\Service\RequestValidatorService;
+use App\Service\TicketService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/tickets')]
 class TicketController extends AbstractController
 {
-    public function __construct(private EntityManagerInterface $entityManager) {}
+    public function __construct(
+        private EntityManagerInterface $entityManager,
+        private TicketService $ticketService,          
+        private RequestValidatorService $validator      
+    ) {}
 
     #[Route('', methods: ['GET'])]
     public function index(): JsonResponse
@@ -64,37 +70,19 @@ class TicketController extends AbstractController
     {
         $data = json_decode($request->getContent(), true);
 
-        $required = ['booking_id', 'flight_id', 'passenger_id', 'travel_class_id', 'price'];
-        foreach ($required as $field) {
-            if (!isset($data[$field])) {
-                return $this->json(['error' => "Missing required field: $field"], 400);
-            }
+        try {
+            $required = ['booking_id', 'flight_id', 'passenger_id', 'travel_class_id', 'price'];
+            $this->validator->validateRequiredFields($data, $required);
+
+            $ticket = $this->ticketService->createTicket($data);
+
+            return $this->json(['status' => 'Created', 'id' => $ticket->getId()], 201);
+
+        } catch (HttpException $e) {
+            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], 400);
         }
-
-        $booking = $this->entityManager->getRepository(Booking::class)->find($data['booking_id']);
-        $flight = $this->entityManager->getRepository(Flight::class)->find($data['flight_id']);
-        $passenger = $this->entityManager->getRepository(Passenger::class)->find($data['passenger_id']);
-        $travelClass = $this->entityManager->getRepository(TravelClass::class)->find($data['travel_class_id']);
-
-        if (!$booking || !$flight || !$passenger || !$travelClass) {
-            return $this->json(['error' => 'One of the related entities (Booking, Flight, Passenger, TravelClass) not found'], 404);
-        }
-
-        $ticket = new Ticket();
-        $ticket->setBooking($booking);
-        $ticket->setFlight($flight);
-        $ticket->setPassenger($passenger);
-        $ticket->setTravelClass($travelClass);
-        $ticket->setPrice((string)$data['price']);
-        
-        if (isset($data['seat_number'])) {
-            $ticket->setSeatNumber($data['seat_number']);
-        }
-
-        $this->entityManager->persist($ticket);
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Created', 'id' => $ticket->getId()], 201);
     }
 
     #[Route('/{id}', methods: ['PUT', 'PATCH'])]
@@ -116,6 +104,11 @@ class TicketController extends AbstractController
             if ($flight) $ticket->setFlight($flight);
         }
         
+        if (isset($data['booking_id'])) {
+            $booking = $this->entityManager->getRepository(Booking::class)->find($data['booking_id']);
+            if ($booking) $ticket->setBooking($booking);
+        }
+
         if (isset($data['travel_class_id'])) {
             $travelClass = $this->entityManager->getRepository(TravelClass::class)->find($data['travel_class_id']);
             if ($travelClass) $ticket->setTravelClass($travelClass);

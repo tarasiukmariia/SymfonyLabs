@@ -4,16 +4,23 @@ namespace App\Controller;
 
 use App\Entity\Airport;
 use App\Entity\Country;
+use App\Service\AirportService;
+use App\Service\RequestValidatorService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/airports')]
 class AirportController extends AbstractController
 {
-    public function __construct(private EntityManagerInterface $entityManager) {}
+    public function __construct(
+        private EntityManagerInterface $entityManager,
+        private AirportService $airportService,        
+        private RequestValidatorService $validator      
+    ) {}
 
     #[Route('', methods: ['GET'])]
     public function index(): JsonResponse
@@ -27,7 +34,6 @@ class AirportController extends AbstractController
                 'name' => $airport->getName(),
                 'iata_code' => $airport->getIataCode(),
                 'city' => $airport->getCity(),
-                // Інформація про країну
                 'country' => [
                     'id' => $airport->getCountry()->getId(),
                     'name' => $airport->getCountry()->getName(),
@@ -65,26 +71,19 @@ class AirportController extends AbstractController
     {
         $data = json_decode($request->getContent(), true);
 
-        if (!isset($data['country_id']) || !isset($data['name']) || !isset($data['iata_code'])) {
-            return $this->json(['error' => 'Missing required fields (name, iata_code, country_id)'], 400);
+        try {
+            $requiredFields = ['country_id', 'name', 'iata_code'];
+            $this->validator->validateRequiredFields($data, $requiredFields);
+
+            $airport = $this->airportService->createAirport($data);
+
+            return $this->json(['status' => 'Created', 'id' => $airport->getId()], 201);
+
+        } catch (HttpException $e) {
+            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], 400);
         }
-
-        $country = $this->entityManager->getRepository(Country::class)->find($data['country_id']);
-        if (!$country) {
-            return $this->json(['error' => 'Country not found'], 404);
-        }
-
-        $airport = new Airport();
-        $airport->setName($data['name']);
-        $airport->setIataCode($data['iata_code']);
-        $airport->setCity($data['city'] ?? ''); 
-        
-        $airport->setCountry($country);
-
-        $this->entityManager->persist($airport);
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Created', 'id' => $airport->getId()], 201);
     }
 
     #[Route('/{id}', methods: ['PUT', 'PATCH'])]

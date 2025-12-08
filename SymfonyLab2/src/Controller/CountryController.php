@@ -3,16 +3,23 @@
 namespace App\Controller;
 
 use App\Entity\Country;
+use App\Service\CountryService;
+use App\Service\RequestValidatorService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/countries')]
 class CountryController extends AbstractController
 {
-    public function __construct(private EntityManagerInterface $entityManager) {}
+    public function __construct(
+        private EntityManagerInterface $entityManager,
+        private CountryService $countryService,         
+        private RequestValidatorService $validator      
+    ) {}
 
     #[Route('', methods: ['GET'])]
     public function index(): JsonResponse
@@ -52,18 +59,19 @@ class CountryController extends AbstractController
     {
         $data = json_decode($request->getContent(), true);
 
-        if (!isset($data['name']) || !isset($data['code'])) {
-            return $this->json(['error' => 'Missing required fields (name, code)'], 400);
+        try {
+            $requiredFields = ['name', 'code'];
+            $this->validator->validateRequiredFields($data, $requiredFields);
+
+            $country = $this->countryService->createCountry($data);
+
+            return $this->json(['status' => 'Created', 'id' => $country->getId()], 201);
+
+        } catch (HttpException $e) {
+            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], 400);
         }
-
-        $country = new Country();
-        $country->setName($data['name']);
-        $country->setCode($data['code']);
-
-        $this->entityManager->persist($country);
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Created', 'id' => $country->getId()], 201);
     }
 
     #[Route('/{id}', methods: ['PUT', 'PATCH'])]

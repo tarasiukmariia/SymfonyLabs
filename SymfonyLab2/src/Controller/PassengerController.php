@@ -3,16 +3,23 @@
 namespace App\Controller;
 
 use App\Entity\Passenger;
+use App\Service\PassengerService;
+use App\Service\RequestValidatorService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/passengers')]
 class PassengerController extends AbstractController
 {
-    public function __construct(private EntityManagerInterface $entityManager) {}
+    public function __construct(
+        private EntityManagerInterface $entityManager,
+        private PassengerService $passengerService,     
+        private RequestValidatorService $validator      
+    ) {}
 
     #[Route('', methods: ['GET'])]
     public function index(): JsonResponse
@@ -60,33 +67,19 @@ class PassengerController extends AbstractController
     {
         $data = json_decode($request->getContent(), true);
 
-        $requiredFields = ['first_name', 'last_name', 'email', 'passport_number', 'date_of_birth'];
-        foreach ($requiredFields as $field) {
-            if (empty($data[$field])) {
-                return $this->json(['error' => "Missing required field: $field"], 400);
-            }
+        try {
+            $requiredFields = ['first_name', 'last_name', 'email', 'passport_number', 'date_of_birth'];
+            $this->validator->validateRequiredFields($data, $requiredFields);
+
+            $passenger = $this->passengerService->createPassenger($data);
+
+            return $this->json(['status' => 'Created', 'id' => $passenger->getId()], 201);
+
+        } catch (HttpException $e) {
+            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], 400);
         }
-
-        $existing = $this->entityManager->getRepository(Passenger::class)->findOneBy(['email' => $data['email']]);
-        if ($existing) {
-            return $this->json(['error' => 'Passenger with this email already exists'], 409); 
-        }
-
-        $passenger = new Passenger();
-        $passenger->setFirstName($data['first_name']);
-        $passenger->setLastName($data['last_name']);
-        $passenger->setEmail($data['email']);
-        $passenger->setPassportNumber($data['passport_number']);
-        $passenger->setDateOfBirth(new \DateTime($data['date_of_birth']));
-        
-        if (isset($data['phone'])) {
-            $passenger->setPhone($data['phone']);
-        }
-
-        $this->entityManager->persist($passenger);
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Created', 'id' => $passenger->getId()], 201);
     }
 
     #[Route('/{id}', methods: ['PUT', 'PATCH'])]
@@ -105,7 +98,14 @@ class PassengerController extends AbstractController
         if (isset($data['email'])) $passenger->setEmail($data['email']);
         if (isset($data['phone'])) $passenger->setPhone($data['phone']);
         if (isset($data['passport_number'])) $passenger->setPassportNumber($data['passport_number']);
-        if (isset($data['date_of_birth'])) $passenger->setDateOfBirth(new \DateTime($data['date_of_birth']));
+        
+        if (isset($data['date_of_birth'])) {
+            try {
+                $passenger->setDateOfBirth(new \DateTime($data['date_of_birth']));
+            } catch (\Exception $e) {
+                return $this->json(['error' => 'Invalid date format'], 400);
+            }
+        }
 
         $this->entityManager->flush();
 
