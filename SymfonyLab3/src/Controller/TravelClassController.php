@@ -3,22 +3,25 @@
 namespace App\Controller;
 
 use App\Entity\TravelClass;
-use App\Service\RequestValidatorService;
+use App\Service\RequestCheckerService;
 use App\Service\TravelClassService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/travel-classes')]
 class TravelClassController extends AbstractController
 {
+    private const REQUIRED_FIELDS = ['name', 'price_multiplier'];
+
     public function __construct(
         private EntityManagerInterface $entityManager,
-        private TravelClassService $travelClassService, 
-        private RequestValidatorService $validator      
+        private TravelClassService $travelClassService,
+        private RequestCheckerService $requestCheckerService
     ) {}
 
     #[Route('', methods: ['GET'])]
@@ -26,16 +29,7 @@ class TravelClassController extends AbstractController
     {
         $classes = $this->entityManager->getRepository(TravelClass::class)->findAll();
         
-        $data = [];
-        foreach ($classes as $class) {
-            $data[] = [
-                'id' => $class->getId(),
-                'name' => $class->getName(),
-                'price_multiplier' => $class->getPriceMultiplier(),
-            ];
-        }
-
-        return $this->json($data);
+        return $this->json($classes);
     }
 
     #[Route('/{id}', methods: ['GET'])]
@@ -44,14 +38,10 @@ class TravelClassController extends AbstractController
         $class = $this->entityManager->getRepository(TravelClass::class)->find($id);
 
         if (!$class) {
-            return $this->json(['error' => 'Travel Class not found'], 404);
+            return $this->json(['error' => 'Travel Class not found'], Response::HTTP_NOT_FOUND);
         }
 
-        return $this->json([
-            'id' => $class->getId(),
-            'name' => $class->getName(),
-            'price_multiplier' => $class->getPriceMultiplier(),
-        ]);
+        return $this->json($class);
     }
 
     #[Route('', methods: ['POST'])]
@@ -60,17 +50,21 @@ class TravelClassController extends AbstractController
         $data = json_decode($request->getContent(), true);
 
         try {
-            $required = ['name', 'price_multiplier'];
-            $this->validator->validateRequiredFields($data, $required);
+            $this->requestCheckerService->check($data, self::REQUIRED_FIELDS);
 
-            $class = $this->travelClassService->createTravelClass($data);
+            $class = $this->travelClassService->createTravelClass(
+                $data['name'],
+                (string)$data['price_multiplier']
+            );
 
-            return $this->json(['status' => 'Created', 'id' => $class->getId()], 201);
+          $this->entityManager->flush();
+
+           return $this->json($class, Response::HTTP_CREATED);
 
         } catch (HttpException $e) {
-            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+            throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], 400);
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
@@ -80,26 +74,22 @@ class TravelClassController extends AbstractController
         $class = $this->entityManager->getRepository(TravelClass::class)->find($id);
 
         if (!$class) {
-            return $this->json(['error' => 'Travel Class not found'], 404);
+            return $this->json(['error' => 'Travel Class not found'], Response::HTTP_NOT_FOUND);
         }
 
         $data = json_decode($request->getContent(), true);
 
-        if (isset($data['name'])) {
-            $class->setName($data['name']);
-        }
-        if (isset($data['price_multiplier'])) {
-            $class->setPriceMultiplier((string)$data['price_multiplier']);
-        }
+        try {
+            $this->travelClassService->updateTravelClass($class, $data);
+            
+            $this->entityManager->flush();
 
-        $this->entityManager->flush();
-
-        return $this->json([
-            'status' => 'Updated',
-            'id' => $class->getId(),
-            'name' => $class->getName(),
-            'price_multiplier' => $class->getPriceMultiplier()
-        ]);
+            return $this->json($class);
+        } catch (HttpException $e) {
+            throw $e;
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+        }
     }
 
     #[Route('/{id}', methods: ['DELETE'])]
@@ -108,14 +98,14 @@ class TravelClassController extends AbstractController
         $class = $this->entityManager->getRepository(TravelClass::class)->find($id);
 
         if (!$class) {
-            return $this->json(['error' => 'Travel Class not found'], 404);
+            return $this->json(['error' => 'Travel Class not found'], Response::HTTP_NOT_FOUND);
         }
 
         try {
             $this->entityManager->remove($class);
             $this->entityManager->flush();
         } catch (\Exception $e) {
-            return $this->json(['error' => 'Cannot delete this class because it is used in tickets'], 400);
+            return $this->json(['error' => 'Cannot delete this class because it is used in tickets'], Response::HTTP_BAD_REQUEST);
         }
 
         return $this->json(['status' => 'Deleted']);

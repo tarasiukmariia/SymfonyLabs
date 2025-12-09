@@ -3,25 +3,25 @@
 namespace App\Controller;
 
 use App\Entity\Ticket;
-use App\Entity\Booking;
-use App\Entity\Flight;
-use App\Entity\TravelClass;
-use App\Service\RequestValidatorService;
+use App\Service\RequestCheckerService;
 use App\Service\TicketService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/tickets')]
 class TicketController extends AbstractController
 {
+    private const REQUIRED_FIELDS = ['booking_id', 'flight_id', 'passenger_id', 'travel_class_id', 'price'];
+
     public function __construct(
         private EntityManagerInterface $entityManager,
-        private TicketService $ticketService,          
-        private RequestValidatorService $validator      
+        private TicketService $ticketService,
+        private RequestCheckerService $requestCheckerService
     ) {}
 
     #[Route('', methods: ['GET'])]
@@ -29,20 +29,7 @@ class TicketController extends AbstractController
     {
         $tickets = $this->entityManager->getRepository(Ticket::class)->findAll();
         
-        $data = [];
-        foreach ($tickets as $ticket) {
-            $data[] = [
-                'id' => $ticket->getId(),
-                'seat_number' => $ticket->getSeatNumber(),
-                'price' => $ticket->getPrice(),
-                'booking_ref' => $ticket->getBooking()->getBookingReference(),
-                'flight_number' => $ticket->getFlight()->getFlightNumber(),
-                'passenger_name' => $ticket->getPassenger()->getFirstName() . ' ' . $ticket->getPassenger()->getLastName(),
-                'class' => $ticket->getTravelClass()->getName(), 
-            ];
-        }
-
-        return $this->json($data);
+        return $this->json($tickets);
     }
 
     #[Route('/{id}', methods: ['GET'])]
@@ -51,18 +38,10 @@ class TicketController extends AbstractController
         $ticket = $this->entityManager->getRepository(Ticket::class)->find($id);
 
         if (!$ticket) {
-            return $this->json(['error' => 'Ticket not found'], 404);
+            return $this->json(['error' => 'Ticket not found'], Response::HTTP_NOT_FOUND);
         }
 
-        return $this->json([
-            'id' => $ticket->getId(),
-            'seat_number' => $ticket->getSeatNumber(),
-            'price' => $ticket->getPrice(),
-            'booking_id' => $ticket->getBooking()->getId(),
-            'flight_id' => $ticket->getFlight()->getId(),
-            'passenger_id' => $ticket->getPassenger()->getId(),
-            'travel_class_id' => $ticket->getTravelClass()->getId(),
-        ]);
+        return $this->json($ticket);
     }
 
     #[Route('', methods: ['POST'])]
@@ -71,17 +50,25 @@ class TicketController extends AbstractController
         $data = json_decode($request->getContent(), true);
 
         try {
-            $required = ['booking_id', 'flight_id', 'passenger_id', 'travel_class_id', 'price'];
-            $this->validator->validateRequiredFields($data, $required);
+            $this->requestCheckerService->check($data, self::REQUIRED_FIELDS);
 
-            $ticket = $this->ticketService->createTicket($data);
+            $ticket = $this->ticketService->createTicket(
+                (int)$data['booking_id'],
+                (int)$data['flight_id'],
+                (int)$data['passenger_id'],
+                (int)$data['travel_class_id'],
+                (string)$data['price'],
+                $data['seat_number'] ?? null
+            );
 
-            return $this->json(['status' => 'Created', 'id' => $ticket->getId()], 201);
+            $this->entityManager->flush();
+
+            return $this->json($ticket, Response::HTTP_CREATED);
 
         } catch (HttpException $e) {
-            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+            throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], 400);
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
@@ -91,32 +78,22 @@ class TicketController extends AbstractController
         $ticket = $this->entityManager->getRepository(Ticket::class)->find($id);
 
         if (!$ticket) {
-            return $this->json(['error' => 'Ticket not found'], 404);
+            return $this->json(['error' => 'Ticket not found'], Response::HTTP_NOT_FOUND);
         }
 
         $data = json_decode($request->getContent(), true);
 
-        if (isset($data['seat_number'])) $ticket->setSeatNumber($data['seat_number']);
-        if (isset($data['price'])) $ticket->setPrice((string)$data['price']);
+        try {
+            $this->ticketService->updateTicket($ticket, $data);
+            
+            $this->entityManager->flush();
 
-        if (isset($data['flight_id'])) {
-            $flight = $this->entityManager->getRepository(Flight::class)->find($data['flight_id']);
-            if ($flight) $ticket->setFlight($flight);
+            return $this->json($ticket);
+        } catch (HttpException $e) {
+            throw $e;
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
-        
-        if (isset($data['booking_id'])) {
-            $booking = $this->entityManager->getRepository(Booking::class)->find($data['booking_id']);
-            if ($booking) $ticket->setBooking($booking);
-        }
-
-        if (isset($data['travel_class_id'])) {
-            $travelClass = $this->entityManager->getRepository(TravelClass::class)->find($data['travel_class_id']);
-            if ($travelClass) $ticket->setTravelClass($travelClass);
-        }
-        
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Updated', 'id' => $ticket->getId()]);
     }
 
     #[Route('/{id}', methods: ['DELETE'])]
@@ -125,11 +102,15 @@ class TicketController extends AbstractController
         $ticket = $this->entityManager->getRepository(Ticket::class)->find($id);
 
         if (!$ticket) {
-            return $this->json(['error' => 'Ticket not found'], 404);
+            return $this->json(['error' => 'Ticket not found'], Response::HTTP_NOT_FOUND);
         }
 
-        $this->entityManager->remove($ticket);
-        $this->entityManager->flush();
+        try {
+            $this->entityManager->remove($ticket);
+            $this->entityManager->flush();
+        } catch (\Exception $e) {
+            return $this->json(['error' => 'Cannot delete this class because it is used in tickets'], Response::HTTP_BAD_REQUEST);
+        }
 
         return $this->json(['status' => 'Deleted']);
     }

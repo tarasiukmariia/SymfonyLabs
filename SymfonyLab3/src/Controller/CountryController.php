@@ -4,21 +4,24 @@ namespace App\Controller;
 
 use App\Entity\Country;
 use App\Service\CountryService;
-use App\Service\RequestValidatorService;
+use App\Service\RequestCheckerService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/countries')]
 class CountryController extends AbstractController
 {
+    private const REQUIRED_FIELDS = ['name', 'code'];
+
     public function __construct(
         private EntityManagerInterface $entityManager,
-        private CountryService $countryService,         
-        private RequestValidatorService $validator      
+        private CountryService $countryService,
+        private RequestCheckerService $requestCheckerService
     ) {}
 
     #[Route('', methods: ['GET'])]
@@ -26,16 +29,7 @@ class CountryController extends AbstractController
     {
         $countries = $this->entityManager->getRepository(Country::class)->findAll();
         
-        $data = [];
-        foreach ($countries as $country) {
-            $data[] = [
-                'id' => $country->getId(),
-                'name' => $country->getName(),
-                'code' => $country->getCode(),
-            ];
-        }
-
-        return $this->json($data);
+        return $this->json($countries);
     }
 
     #[Route('/{id}', methods: ['GET'])]
@@ -44,14 +38,10 @@ class CountryController extends AbstractController
         $country = $this->entityManager->getRepository(Country::class)->find($id);
 
         if (!$country) {
-            return $this->json(['error' => 'Country not found'], 404);
+            return $this->json(['error' => 'Country not found'], Response::HTTP_NOT_FOUND);
         }
 
-        return $this->json([
-            'id' => $country->getId(),
-            'name' => $country->getName(),
-            'code' => $country->getCode(),
-        ]);
+        return $this->json($country);
     }
 
     #[Route('', methods: ['POST'])]
@@ -60,17 +50,21 @@ class CountryController extends AbstractController
         $data = json_decode($request->getContent(), true);
 
         try {
-            $requiredFields = ['name', 'code'];
-            $this->validator->validateRequiredFields($data, $requiredFields);
+            $this->requestCheckerService->check($data, self::REQUIRED_FIELDS);
 
-            $country = $this->countryService->createCountry($data);
+            $country = $this->countryService->createCountry(
+                $data['name'],
+                $data['code']
+            );
 
-            return $this->json(['status' => 'Created', 'id' => $country->getId()], 201);
+            $this->entityManager->flush();
+
+            return $this->json($country, Response::HTTP_CREATED);
 
         } catch (HttpException $e) {
-            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+            throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], 400);
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
@@ -80,26 +74,22 @@ class CountryController extends AbstractController
         $country = $this->entityManager->getRepository(Country::class)->find($id);
 
         if (!$country) {
-            return $this->json(['error' => 'Country not found'], 404);
+            return $this->json(['error' => 'Country not found'], Response::HTTP_NOT_FOUND);
         }
 
         $data = json_decode($request->getContent(), true);
 
-        if (isset($data['name'])) {
-            $country->setName($data['name']);
-        }
-        if (isset($data['code'])) {
-            $country->setCode($data['code']);
-        }
+        try {
+            $this->countryService->updateCountry($country, $data);
+            
+            $this->entityManager->flush();
 
-        $this->entityManager->flush();
-
-        return $this->json([
-            'status' => 'Updated',
-            'id' => $country->getId(),
-            'name' => $country->getName(),
-            'code' => $country->getCode()
-        ]);
+            return $this->json($country);
+        } catch (HttpException $e) {
+            throw $e;
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+        }
     }
 
     #[Route('/{id}', methods: ['DELETE'])]
@@ -108,14 +98,14 @@ class CountryController extends AbstractController
         $country = $this->entityManager->getRepository(Country::class)->find($id);
 
         if (!$country) {
-            return $this->json(['error' => 'Country not found'], 404);
+            return $this->json(['error' => 'Country not found'], Response::HTTP_NOT_FOUND);
         }
         
         try {
             $this->entityManager->remove($country);
             $this->entityManager->flush();
         } catch (\Exception $e) {
-            return $this->json(['error' => 'Cannot delete country because it is linked to other data (airports)'], 400);
+            return $this->json(['error' => 'Cannot delete country because it is linked to other data (airports)'], Response::HTTP_BAD_REQUEST);
         }
 
         return $this->json(['status' => 'Deleted']);

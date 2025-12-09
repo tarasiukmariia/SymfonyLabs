@@ -4,21 +4,24 @@ namespace App\Controller;
 
 use App\Entity\AircraftModel;
 use App\Service\AircraftModelService;
-use App\Service\RequestValidatorService;
+use App\Service\RequestCheckerService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/aircraft-models')]
 class AircraftModelController extends AbstractController
 {
+    private const REQUIRED_FIELDS = ['manufacturer', 'model_name', 'max_range_km'];
+
     public function __construct(
         private EntityManagerInterface $entityManager,
-        private AircraftModelService $aircraftModelService, 
-        private RequestValidatorService $validator         
+        private AircraftModelService $aircraftModelService,
+        private RequestCheckerService $requestCheckerService
     ) {}
 
     #[Route('', methods: ['GET'])]
@@ -26,17 +29,7 @@ class AircraftModelController extends AbstractController
     {
         $models = $this->entityManager->getRepository(AircraftModel::class)->findAll();
         
-        $data = [];
-        foreach ($models as $model) {
-            $data[] = [
-                'id' => $model->getId(),
-                'manufacturer' => $model->getManufacturer(),
-                'model_name' => $model->getModelName(),
-                'max_range_km' => $model->getMaxRangeKm(),
-            ];
-        }
-
-        return $this->json($data);
+        return $this->json($models);
     }
 
     #[Route('/{id}', methods: ['GET'])]
@@ -45,15 +38,10 @@ class AircraftModelController extends AbstractController
         $model = $this->entityManager->getRepository(AircraftModel::class)->find($id);
 
         if (!$model) {
-            return $this->json(['error' => 'Model not found'], 404);
+            return $this->json(['error' => 'Model not found'], Response::HTTP_NOT_FOUND);
         }
 
-        return $this->json([
-            'id' => $model->getId(),
-            'manufacturer' => $model->getManufacturer(),
-            'model_name' => $model->getModelName(),
-            'max_range_km' => $model->getMaxRangeKm(),
-        ]);
+        return $this->json($model);
     }
 
     #[Route('', methods: ['POST'])]
@@ -62,17 +50,22 @@ class AircraftModelController extends AbstractController
         $data = json_decode($request->getContent(), true);
 
         try {
-            $requiredFields = ['manufacturer', 'model_name', 'max_range_km'];
-            $this->validator->validateRequiredFields($data, $requiredFields);
+            $this->requestCheckerService->check($data, self::REQUIRED_FIELDS);
 
-            $model = $this->aircraftModelService->createAircraftModel($data);
+            $model = $this->aircraftModelService->createAircraftModel(
+                $data['manufacturer'],
+                $data['model_name'],
+                (int)$data['max_range_km']
+            );
 
-            return $this->json(['status' => 'Created', 'id' => $model->getId()], 201);
+            $this->entityManager->flush();
+
+            return $this->json($model, Response::HTTP_CREATED);
 
         } catch (HttpException $e) {
-            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+            throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], 400);
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
@@ -82,30 +75,22 @@ class AircraftModelController extends AbstractController
         $model = $this->entityManager->getRepository(AircraftModel::class)->find($id);
 
         if (!$model) {
-            return $this->json(['error' => 'Model not found'], 404);
+            return $this->json(['error' => 'Model not found'], Response::HTTP_NOT_FOUND);
         }
 
         $data = json_decode($request->getContent(), true);
 
-        if (isset($data['manufacturer'])) {
-            $model->setManufacturer($data['manufacturer']);
-        }
-        if (isset($data['model_name'])) {
-            $model->setModelName($data['model_name']);
-        }
-        if (isset($data['max_range_km'])) {
-            $model->setMaxRangeKm((int)$data['max_range_km']);
-        }
+        try {
+            $this->aircraftModelService->updateAircraftModel($model, $data);
+            
+            $this->entityManager->flush();
 
-        $this->entityManager->flush();
-
-        return $this->json([
-            'status' => 'Updated',
-            'id' => $model->getId(),
-            'manufacturer' => $model->getManufacturer(),
-            'model_name' => $model->getModelName(),
-            'max_range_km' => $model->getMaxRangeKm()
-        ]);
+            return $this->json($model);
+        } catch (HttpException $e) {
+            throw $e;
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+        }
     }
 
     #[Route('/{id}', methods: ['DELETE'])]
@@ -114,11 +99,15 @@ class AircraftModelController extends AbstractController
         $model = $this->entityManager->getRepository(AircraftModel::class)->find($id);
 
         if (!$model) {
-            return $this->json(['error' => 'Model not found'], 404);
+            return $this->json(['error' => 'Model not found'], Response::HTTP_NOT_FOUND);
         }
 
-        $this->entityManager->remove($model);
-        $this->entityManager->flush();
+        try {
+            $this->entityManager->remove($model);
+            $this->entityManager->flush();
+        } catch (\Exception $e) {
+            return $this->json(['error' => 'Cannot delete model because it is used by aircrafts'], Response::HTTP_BAD_REQUEST);
+        }
 
         return $this->json(['status' => 'Deleted']);
     }

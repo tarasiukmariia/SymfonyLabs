@@ -3,23 +3,25 @@
 namespace App\Controller;
 
 use App\Entity\Aircraft;
-use App\Entity\AircraftModel;
 use App\Service\AircraftService;
-use App\Service\RequestValidatorService;
+use App\Service\RequestCheckerService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/aircrafts')]
 class AircraftController extends AbstractController
 {
+    private const REQUIRED_FIELDS = ['model_id', 'registration_number', 'total_capacity'];
+
     public function __construct(
         private EntityManagerInterface $entityManager,
-        private AircraftService $aircraftService,       
-        private RequestValidatorService $validator      
+        private AircraftService $aircraftService,
+        private RequestCheckerService $requestCheckerService
     ) {}
 
     #[Route('', methods: ['GET'])]
@@ -27,22 +29,7 @@ class AircraftController extends AbstractController
     {
         $aircrafts = $this->entityManager->getRepository(Aircraft::class)->findAll();
         
-        $data = [];
-        foreach ($aircrafts as $aircraft) {
-            $data[] = [
-                'id' => $aircraft->getId(),
-                'registration_number' => $aircraft->getRegistrationNumber(),
-                'manufacture_date' => $aircraft->getManufactureDate()?->format('Y-m-d'),
-                'total_capacity' => $aircraft->getTotalCapacity(),
-                'model' => [
-                    'id' => $aircraft->getModel()->getId(),
-                    'name' => $aircraft->getModel()->getModelName(),
-                    'manufacturer' => $aircraft->getModel()->getManufacturer(),
-                ]
-            ];
-        }
-
-        return $this->json($data);
+        return $this->json($aircrafts);
     }
 
     #[Route('/{id}', methods: ['GET'])]
@@ -51,19 +38,10 @@ class AircraftController extends AbstractController
         $aircraft = $this->entityManager->getRepository(Aircraft::class)->find($id);
 
         if (!$aircraft) {
-            return $this->json(['error' => 'Aircraft not found'], 404);
+            return $this->json(['error' => 'Aircraft not found'], Response::HTTP_NOT_FOUND);
         }
 
-        return $this->json([
-            'id' => $aircraft->getId(),
-            'registration_number' => $aircraft->getRegistrationNumber(),
-            'manufacture_date' => $aircraft->getManufactureDate()?->format('Y-m-d'),
-            'total_capacity' => $aircraft->getTotalCapacity(),
-            'model' => [
-                'id' => $aircraft->getModel()->getId(),
-                'name' => $aircraft->getModel()->getModelName(),
-            ]
-        ]);
+        return $this->json($aircraft);
     }
 
     #[Route('', methods: ['POST'])]
@@ -72,17 +50,23 @@ class AircraftController extends AbstractController
         $data = json_decode($request->getContent(), true);
 
         try {
-            $requiredFields = ['model_id', 'registration_number', 'total_capacity'];
-            $this->validator->validateRequiredFields($data, $requiredFields);
+            $this->requestCheckerService->check($data, self::REQUIRED_FIELDS);
 
-            $aircraft = $this->aircraftService->createAircraft($data);
+            $aircraft = $this->aircraftService->createAircraft(
+                $data['registration_number'],
+                (int)$data['total_capacity'],
+                (int)$data['model_id'],
+                $data['manufacture_date'] ?? null
+            );
 
-            return $this->json(['status' => 'Created', 'id' => $aircraft->getId()], 201);
+            $this->entityManager->flush();
+
+            return $this->json($aircraft, Response::HTTP_CREATED);
 
         } catch (HttpException $e) {
-            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+            throw $e;
         } catch (\Exception $e) {
-          return $this->json(['error' => $e->getMessage()], 400);
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
@@ -92,35 +76,22 @@ class AircraftController extends AbstractController
         $aircraft = $this->entityManager->getRepository(Aircraft::class)->find($id);
 
         if (!$aircraft) {
-            return $this->json(['error' => 'Aircraft not found'], 404);
+            return $this->json(['error' => 'Aircraft not found'], Response::HTTP_NOT_FOUND);
         }
 
         $data = json_decode($request->getContent(), true);
 
-        if (isset($data['registration_number'])) {
-            $aircraft->setRegistrationNumber($data['registration_number']);
-        }
-        if (isset($data['total_capacity'])) {
-            $aircraft->setTotalCapacity((int)$data['total_capacity']);
-        }
-        if (isset($data['manufacture_date'])) {
-            try {
-                $aircraft->setManufactureDate(new \DateTime($data['manufacture_date']));
-            } catch (\Exception $e) {
-                return $this->json(['error' => 'Invalid date format'], 400);
-            }
-        }
-        
-        if (isset($data['model_id'])) {
-            $model = $this->entityManager->getRepository(AircraftModel::class)->find($data['model_id']);
-            if ($model) {
-                $aircraft->setModel($model);
-            }
-        }
+        try {
+            $this->aircraftService->updateAircraft($aircraft, $data);
+            
+            $this->entityManager->flush();
 
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Updated', 'id' => $aircraft->getId()]);
+            return $this->json($aircraft);
+        } catch (HttpException $e) {
+            throw $e;
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+        }
     }
 
     #[Route('/{id}', methods: ['DELETE'])]
@@ -129,11 +100,15 @@ class AircraftController extends AbstractController
         $aircraft = $this->entityManager->getRepository(Aircraft::class)->find($id);
 
         if (!$aircraft) {
-            return $this->json(['error' => 'Aircraft not found'], 404);
+            return $this->json(['error' => 'Aircraft not found'], Response::HTTP_NOT_FOUND);
         }
 
-        $this->entityManager->remove($aircraft);
-        $this->entityManager->flush();
+        try {
+            $this->entityManager->remove($aircraft);
+            $this->entityManager->flush();
+        } catch (\Exception $e) {
+            return $this->json(['error' => 'Cannot delete aircraft because it is linked to flights'], Response::HTTP_BAD_REQUEST);
+        }
 
         return $this->json(['status' => 'Deleted']);
     }

@@ -3,23 +3,25 @@
 namespace App\Controller;
 
 use App\Entity\Airport;
-use App\Entity\Country;
 use App\Service\AirportService;
-use App\Service\RequestValidatorService;
+use App\Service\RequestCheckerService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/airports')]
 class AirportController extends AbstractController
 {
+    private const REQUIRED_FIELDS = ['name', 'iata_code', 'country_id', 'city'];
+
     public function __construct(
         private EntityManagerInterface $entityManager,
-        private AirportService $airportService,        
-        private RequestValidatorService $validator      
+        private AirportService $airportService,
+        private RequestCheckerService $requestCheckerService
     ) {}
 
     #[Route('', methods: ['GET'])]
@@ -27,22 +29,7 @@ class AirportController extends AbstractController
     {
         $airports = $this->entityManager->getRepository(Airport::class)->findAll();
         
-        $data = [];
-        foreach ($airports as $airport) {
-            $data[] = [
-                'id' => $airport->getId(),
-                'name' => $airport->getName(),
-                'iata_code' => $airport->getIataCode(),
-                'city' => $airport->getCity(),
-                'country' => [
-                    'id' => $airport->getCountry()->getId(),
-                    'name' => $airport->getCountry()->getName(),
-                    'code' => $airport->getCountry()->getCode(),
-                ]
-            ];
-        }
-
-        return $this->json($data);
+        return $this->json($airports);
     }
 
     #[Route('/{id}', methods: ['GET'])]
@@ -51,19 +38,10 @@ class AirportController extends AbstractController
         $airport = $this->entityManager->getRepository(Airport::class)->find($id);
 
         if (!$airport) {
-            return $this->json(['error' => 'Airport not found'], 404);
+            return $this->json(['error' => 'Airport not found'], Response::HTTP_NOT_FOUND);
         }
 
-        return $this->json([
-            'id' => $airport->getId(),
-            'name' => $airport->getName(),
-            'iata_code' => $airport->getIataCode(),
-            'city' => $airport->getCity(),
-            'country' => [
-                'id' => $airport->getCountry()->getId(),
-                'name' => $airport->getCountry()->getName(),
-            ]
-        ]);
+        return $this->json($airport);
     }
 
     #[Route('', methods: ['POST'])]
@@ -72,17 +50,23 @@ class AirportController extends AbstractController
         $data = json_decode($request->getContent(), true);
 
         try {
-            $requiredFields = ['country_id', 'name', 'iata_code'];
-            $this->validator->validateRequiredFields($data, $requiredFields);
+            $this->requestCheckerService->check($data, self::REQUIRED_FIELDS);
 
-            $airport = $this->airportService->createAirport($data);
+            $airport = $this->airportService->createAirport(
+                $data['name'],
+                $data['iata_code'],
+                (int)$data['country_id'],
+                $data['city']
+            );
 
-            return $this->json(['status' => 'Created', 'id' => $airport->getId()], 201);
+            $this->entityManager->flush();
+
+            return $this->json($airport, Response::HTTP_CREATED);
 
         } catch (HttpException $e) {
-            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+            throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], 400);
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
@@ -92,31 +76,22 @@ class AirportController extends AbstractController
         $airport = $this->entityManager->getRepository(Airport::class)->find($id);
 
         if (!$airport) {
-            return $this->json(['error' => 'Airport not found'], 404);
+            return $this->json(['error' => 'Airport not found'], Response::HTTP_NOT_FOUND);
         }
 
         $data = json_decode($request->getContent(), true);
 
-        if (isset($data['name'])) {
-            $airport->setName($data['name']);
-        }
-        if (isset($data['iata_code'])) {
-            $airport->setIataCode($data['iata_code']);
-        }
-        if (isset($data['city'])) {
-            $airport->setCity($data['city']);
-        }
+        try {
+            $this->airportService->updateAirport($airport, $data);
+            
+            $this->entityManager->flush();
 
-        if (isset($data['country_id'])) {
-            $country = $this->entityManager->getRepository(Country::class)->find($data['country_id']);
-            if ($country) {
-                $airport->setCountry($country);
-            }
+            return $this->json($airport);
+        } catch (HttpException $e) {
+            throw $e;
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
-
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Updated', 'id' => $airport->getId()]);
     }
 
     #[Route('/{id}', methods: ['DELETE'])]
@@ -125,11 +100,15 @@ class AirportController extends AbstractController
         $airport = $this->entityManager->getRepository(Airport::class)->find($id);
 
         if (!$airport) {
-            return $this->json(['error' => 'Airport not found'], 404);
+            return $this->json(['error' => 'Airport not found'], Response::HTTP_NOT_FOUND);
         }
 
-        $this->entityManager->remove($airport);
-        $this->entityManager->flush();
+        try {
+            $this->entityManager->remove($airport);
+            $this->entityManager->flush();
+        } catch (\Exception $e) {
+            return $this->json(['error' => 'Cannot delete airport because it is linked to flights'], Response::HTTP_BAD_REQUEST);
+        }
 
         return $this->json(['status' => 'Deleted']);
     }

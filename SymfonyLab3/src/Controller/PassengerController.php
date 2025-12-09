@@ -4,21 +4,24 @@ namespace App\Controller;
 
 use App\Entity\Passenger;
 use App\Service\PassengerService;
-use App\Service\RequestValidatorService;
+use App\Service\RequestCheckerService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/passengers')]
 class PassengerController extends AbstractController
 {
+    private const REQUIRED_FIELDS = ['first_name', 'last_name', 'email', 'passport_number', 'date_of_birth'];
+
     public function __construct(
         private EntityManagerInterface $entityManager,
-        private PassengerService $passengerService,     
-        private RequestValidatorService $validator      
+        private PassengerService $passengerService,
+        private RequestCheckerService $requestCheckerService
     ) {}
 
     #[Route('', methods: ['GET'])]
@@ -26,20 +29,7 @@ class PassengerController extends AbstractController
     {
         $passengers = $this->entityManager->getRepository(Passenger::class)->findAll();
         
-        $data = [];
-        foreach ($passengers as $passenger) {
-            $data[] = [
-                'id' => $passenger->getId(),
-                'first_name' => $passenger->getFirstName(),
-                'last_name' => $passenger->getLastName(),
-                'email' => $passenger->getEmail(),
-                'phone' => $passenger->getPhone(),
-                'passport_number' => $passenger->getPassportNumber(),
-                'date_of_birth' => $passenger->getDateOfBirth()->format('Y-m-d'),
-            ];
-        }
-
-        return $this->json($data);
+        return $this->json($passengers);
     }
 
     #[Route('/{id}', methods: ['GET'])]
@@ -48,18 +38,10 @@ class PassengerController extends AbstractController
         $passenger = $this->entityManager->getRepository(Passenger::class)->find($id);
 
         if (!$passenger) {
-            return $this->json(['error' => 'Passenger not found'], 404);
+            return $this->json(['error' => 'Passenger not found'], Response::HTTP_NOT_FOUND);
         }
 
-        return $this->json([
-            'id' => $passenger->getId(),
-            'first_name' => $passenger->getFirstName(),
-            'last_name' => $passenger->getLastName(),
-            'email' => $passenger->getEmail(),
-            'phone' => $passenger->getPhone(),
-            'passport_number' => $passenger->getPassportNumber(),
-            'date_of_birth' => $passenger->getDateOfBirth()->format('Y-m-d'),
-        ]);
+        return $this->json($passenger);
     }
 
     #[Route('', methods: ['POST'])]
@@ -68,17 +50,25 @@ class PassengerController extends AbstractController
         $data = json_decode($request->getContent(), true);
 
         try {
-            $requiredFields = ['first_name', 'last_name', 'email', 'passport_number', 'date_of_birth'];
-            $this->validator->validateRequiredFields($data, $requiredFields);
+            $this->requestCheckerService->check($data, self::REQUIRED_FIELDS);
 
-            $passenger = $this->passengerService->createPassenger($data);
+            $passenger = $this->passengerService->createPassenger(
+                $data['first_name'],
+                $data['last_name'],
+                $data['email'],
+                $data['passport_number'],
+                $data['date_of_birth'],
+                $data['phone'] ?? null
+            );
 
-            return $this->json(['status' => 'Created', 'id' => $passenger->getId()], 201);
+            $this->entityManager->flush();
+
+            return $this->json($passenger, Response::HTTP_CREATED);
 
         } catch (HttpException $e) {
-            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+            throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], 400);
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
@@ -88,28 +78,22 @@ class PassengerController extends AbstractController
         $passenger = $this->entityManager->getRepository(Passenger::class)->find($id);
 
         if (!$passenger) {
-            return $this->json(['error' => 'Passenger not found'], 404);
+            return $this->json(['error' => 'Passenger not found'], Response::HTTP_NOT_FOUND);
         }
 
         $data = json_decode($request->getContent(), true);
 
-        if (isset($data['first_name'])) $passenger->setFirstName($data['first_name']);
-        if (isset($data['last_name'])) $passenger->setLastName($data['last_name']);
-        if (isset($data['email'])) $passenger->setEmail($data['email']);
-        if (isset($data['phone'])) $passenger->setPhone($data['phone']);
-        if (isset($data['passport_number'])) $passenger->setPassportNumber($data['passport_number']);
-        
-        if (isset($data['date_of_birth'])) {
-            try {
-                $passenger->setDateOfBirth(new \DateTime($data['date_of_birth']));
-            } catch (\Exception $e) {
-                return $this->json(['error' => 'Invalid date format'], 400);
-            }
+        try {
+            $this->passengerService->updatePassenger($passenger, $data);
+            
+            $this->entityManager->flush();
+
+            return $this->json($passenger);
+        } catch (HttpException $e) {
+            throw $e;
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
-
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Updated', 'id' => $passenger->getId()]);
     }
 
     #[Route('/{id}', methods: ['DELETE'])]
@@ -118,14 +102,14 @@ class PassengerController extends AbstractController
         $passenger = $this->entityManager->getRepository(Passenger::class)->find($id);
 
         if (!$passenger) {
-            return $this->json(['error' => 'Passenger not found'], 404);
+            return $this->json(['error' => 'Passenger not found'], Response::HTTP_NOT_FOUND);
         }
 
         try {
             $this->entityManager->remove($passenger);
             $this->entityManager->flush();
         } catch (\Exception $e) {
-            return $this->json(['error' => 'Cannot delete passenger because they have linked bookings/tickets'], 400);
+            return $this->json(['error' => 'Cannot delete passenger because they have linked bookings/tickets'], Response::HTTP_BAD_REQUEST);
         }
 
         return $this->json(['status' => 'Deleted']);

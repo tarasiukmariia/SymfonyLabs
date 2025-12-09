@@ -3,23 +3,25 @@
 namespace App\Controller;
 
 use App\Entity\Baggage;
-use App\Entity\Ticket;
 use App\Service\BaggageService;
-use App\Service\RequestValidatorService;
+use App\Service\RequestCheckerService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/baggage')]
 class BaggageController extends AbstractController
 {
+    private const REQUIRED_FIELDS = ['ticket_id', 'weight_kg'];
+
     public function __construct(
         private EntityManagerInterface $entityManager,
-        private BaggageService $baggageService,         
-        private RequestValidatorService $validator      
+        private BaggageService $baggageService,
+        private RequestCheckerService $requestCheckerService
     ) {}
 
     #[Route('', methods: ['GET'])]
@@ -27,18 +29,7 @@ class BaggageController extends AbstractController
     {
         $baggageList = $this->entityManager->getRepository(Baggage::class)->findAll();
         
-        $data = [];
-        foreach ($baggageList as $item) {
-            $data[] = [
-                'id' => $item->getId(),
-                'weight_kg' => $item->getWeightKg(),
-                'type' => $item->getType(),
-                'price' => $item->getPrice(),
-                'ticket_id' => $item->getTicket()->getId() 
-            ];
-        }
-
-        return $this->json($data);
+        return $this->json($baggageList);
     }
 
     #[Route('/{id}', methods: ['GET'])]
@@ -47,16 +38,10 @@ class BaggageController extends AbstractController
         $item = $this->entityManager->getRepository(Baggage::class)->find($id);
 
         if (!$item) {
-            return $this->json(['error' => 'Baggage item not found'], 404);
+            return $this->json(['error' => 'Baggage item not found'], Response::HTTP_NOT_FOUND);
         }
 
-        return $this->json([
-            'id' => $item->getId(),
-            'weight_kg' => $item->getWeightKg(),
-            'type' => $item->getType(),
-            'price' => $item->getPrice(),
-            'ticket_id' => $item->getTicket()->getId()
-        ]);
+        return $this->json($item);
     }
 
     #[Route('', methods: ['POST'])]
@@ -65,20 +50,23 @@ class BaggageController extends AbstractController
         $data = json_decode($request->getContent(), true);
 
         try {
-            // 1. ВАЛІДАЦІЯ
-            $requiredFields = ['ticket_id', 'weight_kg'];
-            $this->validator->validateRequiredFields($data, $requiredFields);
+            $this->requestCheckerService->check($data, self::REQUIRED_FIELDS);
 
-            // 2. ЛОГІКА (через сервіс)
-            $baggage = $this->baggageService->createBaggage($data);
+            $baggage = $this->baggageService->createBaggage(
+                (int)$data['ticket_id'],
+                (string)$data['weight_kg'],
+                $data['type'] ?? 'checked',
+                isset($data['price']) ? (string)$data['price'] : null
+            );
 
-            // 3. ВІДПОВІДЬ
-            return $this->json(['status' => 'Created', 'id' => $baggage->getId()], 201);
+            $this->entityManager->flush();
+
+            return $this->json($baggage, Response::HTTP_CREATED);
 
         } catch (HttpException $e) {
-            return $this->json(['error' => $e->getMessage()], $e->getStatusCode());
+            throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], 400);
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
@@ -88,31 +76,22 @@ class BaggageController extends AbstractController
         $baggage = $this->entityManager->getRepository(Baggage::class)->find($id);
 
         if (!$baggage) {
-            return $this->json(['error' => 'Baggage item not found'], 404);
+            return $this->json(['error' => 'Baggage item not found'], Response::HTTP_NOT_FOUND);
         }
 
         $data = json_decode($request->getContent(), true);
 
-        if (isset($data['weight_kg'])) {
-            $baggage->setWeightKg((string)$data['weight_kg']);
-        }
-        if (isset($data['type'])) {
-            $baggage->setType($data['type']);
-        }
-        if (isset($data['price'])) {
-            $baggage->setPrice((string)$data['price']);
-        }
-        
-        if (isset($data['ticket_id'])) {
-            $ticket = $this->entityManager->getRepository(Ticket::class)->find($data['ticket_id']);
-            if ($ticket) {
-                $baggage->setTicket($ticket);
-            }
-        }
+        try {
+            $this->baggageService->updateBaggage($baggage, $data);
+            
+            $this->entityManager->flush();
 
-        $this->entityManager->flush();
-
-        return $this->json(['status' => 'Updated', 'id' => $baggage->getId()]);
+            return $this->json($baggage);
+        } catch (HttpException $e) {
+            throw $e;
+        } catch (\Exception $e) {
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+        }
     }
 
     #[Route('/{id}', methods: ['DELETE'])]
@@ -121,11 +100,15 @@ class BaggageController extends AbstractController
         $baggage = $this->entityManager->getRepository(Baggage::class)->find($id);
 
         if (!$baggage) {
-            return $this->json(['error' => 'Baggage item not found'], 404);
+            return $this->json(['error' => 'Baggage item not found'], Response::HTTP_NOT_FOUND);
         }
 
-        $this->entityManager->remove($baggage);
-        $this->entityManager->flush();
+        try {
+            $this->entityManager->remove($baggage);
+            $this->entityManager->flush();
+        } catch (\Exception $e) {
+            return $this->json(['error' => 'Cannot delete baggage item'], Response::HTTP_BAD_REQUEST);
+        }
 
         return $this->json(['status' => 'Deleted']);
     }
