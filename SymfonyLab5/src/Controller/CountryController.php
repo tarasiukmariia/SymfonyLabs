@@ -3,7 +3,7 @@
 namespace App\Controller;
 
 use App\Entity\Country;
-use App\Repository\CountryRepository; 
+use App\Repository\CountryRepository;
 use App\Service\CountryService;
 use App\Service\RequestCheckerService;
 use Doctrine\ORM\EntityManagerInterface;
@@ -12,9 +12,11 @@ use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\Security\Http\Attribute\IsGranted;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/countries')]
+#[IsGranted('IS_AUTHENTICATED_FULLY')]
 class CountryController extends AbstractController
 {
     private const REQUIRED_FIELDS = ['name', 'code'];
@@ -26,7 +28,7 @@ class CountryController extends AbstractController
         private RequestCheckerService $requestCheckerService
     ) {}
 
-    #[Route('', methods: ['GET'])]
+    #[Route('', name: 'app_countries_collection', methods: [Request::METHOD_GET])]
     public function index(Request $request): JsonResponse
     {
         $requestData = $request->query->all();
@@ -37,28 +39,28 @@ class CountryController extends AbstractController
 
         $result = $repository->getAllCountriesByFilter($requestData, $itemsPerPage, $page);
         
-        return $this->json($result);
+        return new JsonResponse($result, Response::HTTP_OK);
     }
 
-    #[Route('/{id}', methods: ['GET'])]
+    #[Route('/{id}', name: 'app_countries_item', methods: [Request::METHOD_GET])]
     public function show(int $id): JsonResponse
     {
         $country = $this->entityManager->getRepository(Country::class)->find($id);
 
         if (!$country) {
-            return $this->json(['error' => 'Country not found'], Response::HTTP_NOT_FOUND);
+            return new JsonResponse(['error' => 'Country not found'], Response::HTTP_NOT_FOUND);
         }
 
-        return $this->json($country);
+        return new JsonResponse($country, Response::HTTP_OK);
     }
 
-    #[Route('', methods: ['POST'])]
+    #[Route('', name: 'app_countries_create', methods: [Request::METHOD_POST])]
     public function create(Request $request): JsonResponse
     {
-        $data = json_decode($request->getContent(), true);
+        $data = json_decode($request->getContent(), associative: true);
 
         try {
-            $this->requestCheckerService->check($data, self::REQUIRED_FIELDS);
+            $this->requestCheckerService->check($data, fields: self::REQUIRED_FIELDS);
 
             $country = $this->countryService->createCountry(
                 $data['name'],
@@ -67,55 +69,55 @@ class CountryController extends AbstractController
 
             $this->entityManager->flush();
 
-            return $this->json($country, Response::HTTP_CREATED);
+            return new JsonResponse($country, status: Response::HTTP_CREATED);
 
         } catch (HttpException $e) {
             throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+            return new JsonResponse(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
-    #[Route('/{id}', methods: ['PUT', 'PATCH'])]
+    #[Route('/{id}', name: 'app_countries_update', methods: [Request::METHOD_PUT, Request::METHOD_PATCH])]
     public function update(int $id, Request $request): JsonResponse
     {
         $country = $this->entityManager->getRepository(Country::class)->find($id);
 
         if (!$country) {
-            return $this->json(['error' => 'Country not found'], Response::HTTP_NOT_FOUND);
+            return new JsonResponse(['error' => 'Country not found'], Response::HTTP_NOT_FOUND);
         }
 
-        $data = json_decode($request->getContent(), true);
+        $data = json_decode($request->getContent(), associative: true);
 
         try {
             $this->countryService->updateCountry($country, $data);
             
             $this->entityManager->flush();
 
-            return $this->json($country);
+            return new JsonResponse($country, Response::HTTP_OK);
         } catch (HttpException $e) {
             throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+            return new JsonResponse(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
-    #[Route('/{id}', methods: ['DELETE'])]
+    #[Route('/{id}', name: 'app_countries_delete', methods: [Request::METHOD_DELETE])]
     public function delete(int $id): JsonResponse
     {
         $country = $this->entityManager->getRepository(Country::class)->find($id);
 
         if (!$country) {
-            return $this->json(['error' => 'Country not found'], Response::HTTP_NOT_FOUND);
+            return new JsonResponse(['error' => 'Country not found'], Response::HTTP_NOT_FOUND);
         }
         
         try {
             $this->entityManager->remove($country);
             $this->entityManager->flush();
         } catch (\Exception $e) {
-            return $this->json(['error' => 'Cannot delete country because it is linked to other data (airports)'], Response::HTTP_BAD_REQUEST);
+            return new JsonResponse(['error' => 'Cannot delete country because it is linked to other data (airports)'], Response::HTTP_BAD_REQUEST);
         }
 
-        return $this->json(['status' => 'Deleted']);
+        return new JsonResponse(['status' => 'Deleted'], Response::HTTP_OK);
     }
 }

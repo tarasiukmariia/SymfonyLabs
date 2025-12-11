@@ -3,7 +3,7 @@
 namespace App\Controller;
 
 use App\Entity\Flight;
-use App\Repository\FlightRepository; 
+use App\Repository\FlightRepository;
 use App\Service\FlightService;
 use App\Service\RequestCheckerService;
 use Doctrine\ORM\EntityManagerInterface;
@@ -12,9 +12,11 @@ use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\Security\Http\Attribute\IsGranted;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/flights')]
+#[IsGranted('IS_AUTHENTICATED_FULLY')]
 class FlightController extends AbstractController
 {
     private const REQUIRED_FIELDS = [
@@ -33,7 +35,7 @@ class FlightController extends AbstractController
         private RequestCheckerService $requestCheckerService
     ) {}
 
-    #[Route('', methods: ['GET'])]
+    #[Route('', name: 'app_flights_collection', methods: [Request::METHOD_GET])]
     public function index(Request $request): JsonResponse
     {
         $requestData = $request->query->all();
@@ -44,28 +46,28 @@ class FlightController extends AbstractController
 
         $result = $repository->getAllFlightsByFilter($requestData, $itemsPerPage, $page);
         
-        return $this->json($result);
+        return new JsonResponse($result, Response::HTTP_OK);
     }
 
-    #[Route('/{id}', methods: ['GET'])]
+    #[Route('/{id}', name: 'app_flights_item', methods: [Request::METHOD_GET])]
     public function show(int $id): JsonResponse
     {
         $flight = $this->entityManager->getRepository(Flight::class)->find($id);
 
         if (!$flight) {
-            return $this->json(['error' => 'Flight not found'], Response::HTTP_NOT_FOUND);
+            return new JsonResponse(['error' => 'Flight not found'], Response::HTTP_NOT_FOUND);
         }
 
-        return $this->json($flight);
+        return new JsonResponse($flight, Response::HTTP_OK);
     }
 
-    #[Route('', methods: ['POST'])]
+    #[Route('', name: 'app_flights_create', methods: [Request::METHOD_POST])]
     public function create(Request $request): JsonResponse
     {
-        $data = json_decode($request->getContent(), true);
+        $data = json_decode($request->getContent(), associative: true);
 
         try {
-            $this->requestCheckerService->check($data, self::REQUIRED_FIELDS);
+            $this->requestCheckerService->check($data, fields: self::REQUIRED_FIELDS);
 
             $flight = $this->flightService->createFlight(
                 $data['flight_number'],
@@ -80,55 +82,55 @@ class FlightController extends AbstractController
 
             $this->entityManager->flush();
 
-            return $this->json($flight, Response::HTTP_CREATED);
+            return new JsonResponse($flight, status: Response::HTTP_CREATED);
 
         } catch (HttpException $e) {
             throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+            return new JsonResponse(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
-    #[Route('/{id}', methods: ['PUT', 'PATCH'])]
+    #[Route('/{id}', name: 'app_flights_update', methods: [Request::METHOD_PUT, Request::METHOD_PATCH])]
     public function update(int $id, Request $request): JsonResponse
     {
         $flight = $this->entityManager->getRepository(Flight::class)->find($id);
 
         if (!$flight) {
-            return $this->json(['error' => 'Flight not found'], Response::HTTP_NOT_FOUND);
+            return new JsonResponse(['error' => 'Flight not found'], Response::HTTP_NOT_FOUND);
         }
 
-        $data = json_decode($request->getContent(), true);
+        $data = json_decode($request->getContent(), associative: true);
 
         try {
             $this->flightService->updateFlight($flight, $data);
             
             $this->entityManager->flush();
 
-            return $this->json($flight);
+            return new JsonResponse($flight, Response::HTTP_OK);
         } catch (HttpException $e) {
             throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+            return new JsonResponse(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
-    #[Route('/{id}', methods: ['DELETE'])]
+    #[Route('/{id}', name: 'app_flights_delete', methods: [Request::METHOD_DELETE])]
     public function delete(int $id): JsonResponse
     {
         $flight = $this->entityManager->getRepository(Flight::class)->find($id);
 
         if (!$flight) {
-            return $this->json(['error' => 'Flight not found'], Response::HTTP_NOT_FOUND);
+            return new JsonResponse(['error' => 'Flight not found'], Response::HTTP_NOT_FOUND);
         }
 
         try {
             $this->entityManager->remove($flight);
             $this->entityManager->flush();
         } catch (\Exception $e) {
-            return $this->json(['error' => 'Cannot delete flight because it has linked tickets'], Response::HTTP_BAD_REQUEST);
+            return new JsonResponse(['error' => 'Cannot delete flight because it has linked tickets'], Response::HTTP_BAD_REQUEST);
         }
 
-        return $this->json(['status' => 'Deleted']);
+        return new JsonResponse(['status' => 'Deleted'], Response::HTTP_OK);
     }
 }

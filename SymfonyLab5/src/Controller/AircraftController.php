@@ -3,7 +3,7 @@
 namespace App\Controller;
 
 use App\Entity\Aircraft;
-use App\Repository\AircraftRepository; 
+use App\Repository\AircraftRepository;
 use App\Service\AircraftService;
 use App\Service\RequestCheckerService;
 use Doctrine\ORM\EntityManagerInterface;
@@ -12,9 +12,11 @@ use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\Security\Http\Attribute\IsGranted;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/aircrafts')]
+#[IsGranted('IS_AUTHENTICATED_FULLY')]
 class AircraftController extends AbstractController
 {
     private const REQUIRED_FIELDS = ['model_id', 'registration_number', 'total_capacity'];
@@ -26,11 +28,10 @@ class AircraftController extends AbstractController
         private RequestCheckerService $requestCheckerService
     ) {}
 
-    #[Route('', methods: ['GET'])]
+    #[Route('', name: 'app_aircrafts_collection', methods: [Request::METHOD_GET])]
     public function index(Request $request): JsonResponse
     {
         $requestData = $request->query->all();
-
         $page = (int) ($requestData['page'] ?? 1);
         $itemsPerPage = (int) ($requestData['itemsPerPage'] ?? self::ITEMS_PER_PAGE);
 
@@ -38,28 +39,28 @@ class AircraftController extends AbstractController
 
         $result = $repository->getAllAircraftsByFilter($requestData, $itemsPerPage, $page);
         
-        return $this->json($result);
+        return new JsonResponse($result, Response::HTTP_OK);
     }
 
-    #[Route('/{id}', methods: ['GET'])]
+    #[Route('/{id}', name: 'app_aircrafts_item', methods: [Request::METHOD_GET])]
     public function show(int $id): JsonResponse
     {
         $aircraft = $this->entityManager->getRepository(Aircraft::class)->find($id);
 
         if (!$aircraft) {
-            return $this->json(['error' => 'Aircraft not found'], Response::HTTP_NOT_FOUND);
+            return new JsonResponse(['error' => 'Aircraft not found'], Response::HTTP_NOT_FOUND);
         }
 
-        return $this->json($aircraft);
+        return new JsonResponse($aircraft, Response::HTTP_OK);
     }
 
-    #[Route('', methods: ['POST'])]
+    #[Route('', name: 'app_aircrafts_create', methods: [Request::METHOD_POST])]
     public function create(Request $request): JsonResponse
     {
-        $data = json_decode($request->getContent(), true);
+        $data = json_decode($request->getContent(), associative: true);
 
         try {
-            $this->requestCheckerService->check($data, self::REQUIRED_FIELDS);
+            $this->requestCheckerService->check($data, fields: self::REQUIRED_FIELDS);
 
             $aircraft = $this->aircraftService->createAircraft(
                 $data['registration_number'],
@@ -70,55 +71,55 @@ class AircraftController extends AbstractController
 
             $this->entityManager->flush();
 
-            return $this->json($aircraft, Response::HTTP_CREATED);
+            return new JsonResponse($aircraft, Response::HTTP_CREATED);
 
         } catch (HttpException $e) {
             throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+            return new JsonResponse(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
-    #[Route('/{id}', methods: ['PUT', 'PATCH'])]
+    #[Route('/{id}', name: 'app_aircrafts_update', methods: [Request::METHOD_PUT, Request::METHOD_PATCH])]
     public function update(int $id, Request $request): JsonResponse
     {
         $aircraft = $this->entityManager->getRepository(Aircraft::class)->find($id);
 
         if (!$aircraft) {
-            return $this->json(['error' => 'Aircraft not found'], Response::HTTP_NOT_FOUND);
+            return new JsonResponse(['error' => 'Aircraft not found'], Response::HTTP_NOT_FOUND);
         }
 
-        $data = json_decode($request->getContent(), true);
+        $data = json_decode($request->getContent(), associative: true);
 
         try {
             $this->aircraftService->updateAircraft($aircraft, $data);
             
             $this->entityManager->flush();
 
-            return $this->json($aircraft);
+            return new JsonResponse($aircraft, Response::HTTP_OK);
         } catch (HttpException $e) {
             throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+            return new JsonResponse(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
-    #[Route('/{id}', methods: ['DELETE'])]
+    #[Route('/{id}', name: 'app_aircrafts_delete', methods: [Request::METHOD_DELETE])]
     public function delete(int $id): JsonResponse
     {
         $aircraft = $this->entityManager->getRepository(Aircraft::class)->find($id);
 
         if (!$aircraft) {
-            return $this->json(['error' => 'Aircraft not found'], Response::HTTP_NOT_FOUND);
+            return new JsonResponse(['error' => 'Aircraft not found'], Response::HTTP_NOT_FOUND);
         }
 
         try {
             $this->entityManager->remove($aircraft);
             $this->entityManager->flush();
         } catch (\Exception $e) {
-            return $this->json(['error' => 'Cannot delete aircraft because it is linked to flights'], Response::HTTP_BAD_REQUEST);
+            return new JsonResponse(['error' => 'Cannot delete aircraft because it is linked to flights'], Response::HTTP_BAD_REQUEST);
         }
 
-        return $this->json(['status' => 'Deleted']);
+        return new JsonResponse(['status' => 'Deleted'], Response::HTTP_OK);
     }
 }

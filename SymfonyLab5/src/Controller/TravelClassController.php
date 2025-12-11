@@ -12,9 +12,11 @@ use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\Security\Http\Attribute\IsGranted;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 #[Route('/api/travel-classes')]
+#[IsGranted('IS_AUTHENTICATED_FULLY')]
 class TravelClassController extends AbstractController
 {
     private const REQUIRED_FIELDS = ['name', 'price_multiplier'];
@@ -26,7 +28,7 @@ class TravelClassController extends AbstractController
         private RequestCheckerService $requestCheckerService
     ) {}
 
-    #[Route('', methods: ['GET'])]
+    #[Route('', name: 'app_travel_classes_collection', methods: [Request::METHOD_GET])]
     public function index(Request $request): JsonResponse
     {
         $requestData = $request->query->all();
@@ -37,28 +39,28 @@ class TravelClassController extends AbstractController
 
         $result = $repository->getAllTravelClassesByFilter($requestData, $itemsPerPage, $page);
         
-        return $this->json($result);
+        return new JsonResponse($result, Response::HTTP_OK);
     }
 
-    #[Route('/{id}', methods: ['GET'])]
+    #[Route('/{id}', name: 'app_travel_classes_item', methods: [Request::METHOD_GET])]
     public function show(int $id): JsonResponse
     {
         $class = $this->entityManager->getRepository(TravelClass::class)->find($id);
 
         if (!$class) {
-            return $this->json(['error' => 'Travel Class not found'], Response::HTTP_NOT_FOUND);
+            return new JsonResponse(['error' => 'Travel Class not found'], Response::HTTP_NOT_FOUND);
         }
 
-        return $this->json($class);
+        return new JsonResponse($class, Response::HTTP_OK);
     }
 
-    #[Route('', methods: ['POST'])]
+    #[Route('', name: 'app_travel_classes_create', methods: [Request::METHOD_POST])]
     public function create(Request $request): JsonResponse
     {
-        $data = json_decode($request->getContent(), true);
+        $data = json_decode($request->getContent(), associative: true);
 
         try {
-            $this->requestCheckerService->check($data, self::REQUIRED_FIELDS);
+            $this->requestCheckerService->check($data, fields: self::REQUIRED_FIELDS);
 
             $class = $this->travelClassService->createTravelClass(
                 $data['name'],
@@ -67,55 +69,55 @@ class TravelClassController extends AbstractController
 
             $this->entityManager->flush();
 
-            return $this->json($class, Response::HTTP_CREATED);
+            return new JsonResponse($class, status: Response::HTTP_CREATED);
 
         } catch (HttpException $e) {
             throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+            return new JsonResponse(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
-    #[Route('/{id}', methods: ['PUT', 'PATCH'])]
+    #[Route('/{id}', name: 'app_travel_classes_update', methods: [Request::METHOD_PUT, Request::METHOD_PATCH])]
     public function update(int $id, Request $request): JsonResponse
     {
         $class = $this->entityManager->getRepository(TravelClass::class)->find($id);
 
         if (!$class) {
-            return $this->json(['error' => 'Travel Class not found'], Response::HTTP_NOT_FOUND);
+            return new JsonResponse(['error' => 'Travel Class not found'], Response::HTTP_NOT_FOUND);
         }
 
-        $data = json_decode($request->getContent(), true);
+        $data = json_decode($request->getContent(), associative: true);
 
         try {
             $this->travelClassService->updateTravelClass($class, $data);
             
             $this->entityManager->flush();
 
-            return $this->json($class);
+            return new JsonResponse($class, Response::HTTP_OK);
         } catch (HttpException $e) {
             throw $e;
         } catch (\Exception $e) {
-            return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+            return new JsonResponse(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
         }
     }
 
-    #[Route('/{id}', methods: ['DELETE'])]
+    #[Route('/{id}', name: 'app_travel_classes_delete', methods: [Request::METHOD_DELETE])]
     public function delete(int $id): JsonResponse
     {
         $class = $this->entityManager->getRepository(TravelClass::class)->find($id);
 
         if (!$class) {
-            return $this->json(['error' => 'Travel Class not found'], Response::HTTP_NOT_FOUND);
+            return new JsonResponse(['error' => 'Travel Class not found'], Response::HTTP_NOT_FOUND);
         }
 
         try {
             $this->entityManager->remove($class);
             $this->entityManager->flush();
         } catch (\Exception $e) {
-            return $this->json(['error' => 'Cannot delete this class because it is used in tickets'], Response::HTTP_BAD_REQUEST);
+            return new JsonResponse(['error' => 'Cannot delete this class because it is used in tickets'], Response::HTTP_BAD_REQUEST);
         }
 
-        return $this->json(['status' => 'Deleted']);
+        return new JsonResponse(['status' => 'Deleted'], Response::HTTP_OK);
     }
 }
